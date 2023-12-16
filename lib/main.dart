@@ -1,6 +1,13 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'dart:io';
 
-void main() => runApp(MedicineReminderApp());
+import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:path_provider/path_provider.dart';
+
+void main() {
+  runApp(MedicineReminderApp());
+}
 
 class MedicineReminderApp extends StatelessWidget {
   @override
@@ -15,112 +22,241 @@ class MedicineReminderApp extends StatelessWidget {
   }
 }
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+  List<Medicine> medicines = [];
+
+  @override
+  void initState() {
+    super.initState();
+    initializeNotifications();
+    loadMedicines();
+  }
+
+  Future<void> initializeNotifications() async {
+    final AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    final InitializationSettings initializationSettings =
+        InitializationSettings(
+            android: initializationSettingsAndroid, iOS: null, macOS: null);
+
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings,
+        onSelectNotification: selectNotification);
+  }
+
+  Future<void> _showNotification(String medicineName) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'channel_id',
+      'channel_name',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
+
+    await flutterLocalNotificationsPlugin.show(
+      0,
+      'Medicine Reminder',
+      'It\'s time to take $medicineName!',
+      platformChannelSpecifics,
+      payload: 'Default_Sound',
+    );
+  }
+
+  Future<void> selectNotification(String? payload) async {
+    // Handle notification click event
+  }
+
+  Future<void> loadMedicines() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/medicines.json');
+
+      if (file.existsSync()) {
+        final content = await file.readAsString();
+        final List<dynamic> decoded = jsonDecode(content);
+
+        setState(() {
+          medicines = decoded.map((json) => Medicine.fromJson(json)).toList();
+        });
+      }
+    } catch (e) {
+      print('Error loading medicines: $e');
+    }
+  }
+
+  Future<void> saveMedicines() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/medicines.json');
+
+      final encoded = jsonEncode(medicines);
+      await file.writeAsString(encoded);
+    } catch (e) {
+      print('Error saving medicines: $e');
+    }
+  }
+
+  void addMedicine(String name, TimeOfDay time) {
+    final medicine = Medicine(name: name, time: time);
+
+    setState(() {
+      medicines.add(medicine);
+    });
+
+    saveMedicines();
+    scheduleNotification(medicine);
+  }
+
+  Future<void> scheduleNotification(Medicine medicine) async {
+    final now = DateTime.now();
+    final scheduledTime = DateTime(
+        now.year, now.month, now.day, medicine.time.hour, medicine.time.minute);
+
+    if (scheduledTime.isBefore(now)) {
+      scheduledTime.add(Duration(days: 1));
+    }
+
+    final timeDifference = scheduledTime.difference(now);
+    final secondsUntilNotification = timeDifference.inSeconds;
+
+    var tz;
+    await flutterLocalNotificationsPlugin.zonedSchedule(
+      0,
+      'Medicine Reminder',
+      'It\'s time to take ${medicine.name}!',
+      tz.TZDateTime.from(scheduledTime, tz.local),
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'channel_id',
+          'channel_name',
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+        ),
+      ),
+      androidAllowWhileIdle: true,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('Medicine Reminder'),
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              'Today\'s Medicines',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: ListView.builder(
+              itemCount: medicines.length,
+              itemBuilder: (context, index) {
+                final medicine = medicines[index];
+                return ListTile(
+                  title: Text(medicine.name),
+                  subtitle: Text(
+                      'Time: ${medicine.time.hour}:${medicine.time.minute}'),
+                );
+              },
             ),
-            SizedBox(height: 20),
-            MedicineCard(
-              medicineName: 'Aspirin',
-              dosage: '1 tablet',
-              time: '8:00 AM',
-              isTaken: false,
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: ElevatedButton(
+              onPressed: () {
+                showAddMedicineDialog(context);
+              },
+              child: Text('Add Medicine'),
             ),
-            MedicineCard(
-              medicineName: 'Ibuprofen',
-              dosage: '2 tablets',
-              time: '12:00 PM',
-              isTaken: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> showAddMedicineDialog(BuildContext context) async {
+    String medicineName = '';
+    TimeOfDay? selectedTime = TimeOfDay.now();
+
+    await showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Add Medicine'),
+          content: Column(
+            children: [
+              TextField(
+                onChanged: (value) {
+                  medicineName = value;
+                },
+                decoration: InputDecoration(labelText: 'Medicine Name'),
+              ),
+              SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () async {
+                  selectedTime = await showTimePicker(
+                    context: context,
+                    initialTime: TimeOfDay.now(),
+                  );
+                },
+                child: Text('Select Time'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('Cancel'),
             ),
-            // Add more MedicineCard widgets for other medicines
+            ElevatedButton(
+              onPressed: () {
+                if (medicineName.isNotEmpty) {
+                  addMedicine(medicineName, selectedTime!);
+                }
+                Navigator.of(context).pop();
+              },
+              child: Text('Add'),
+            ),
           ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // Navigate to the add medicine screen
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => AddMedicineScreen()),
-          );
-        },
-        child: Icon(Icons.add),
-      ),
+        );
+      },
     );
   }
 }
 
-class MedicineCard extends StatelessWidget {
-  final String medicineName;
-  final String dosage;
-  final String time;
-  final bool isTaken;
+class Medicine {
+  final String name;
+  final TimeOfDay time;
 
-  MedicineCard({
-    required this.medicineName,
-    required this.dosage,
-    required this.time,
-    required this.isTaken,
-  });
+  Medicine({required this.name, required this.time});
 
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 5,
-      margin: EdgeInsets.all(15),
-      child: ListTile(
-        title: Text(
-          medicineName,
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Dosage: $dosage'),
-            Text('Time: $time'),
-          ],
-        ),
-        trailing: Checkbox(
-          value: isTaken,
-          onChanged: (bool? value) {
-            // Handle checkbox state change
-          },
-        ),
-      ),
-    );
-  }
-}
+  Medicine.fromJson(Map<String, dynamic> json)
+      : name = json['name'],
+        time = TimeOfDay(
+          hour: json['hour'],
+          minute: json['minute'],
+        );
 
-class AddMedicineScreen extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Add Medicine'),
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // Add form fields and buttons for adding a new medicine
-            Text(
-              'Add Medicine Screen',
-              style: TextStyle(fontSize: 20),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'hour': time.hour,
+        'minute': time.minute,
+      };
 }
