@@ -120,7 +120,7 @@ class AddMedicineButton extends StatelessWidget {
 
   Future<void> showAddMedicineDialog(BuildContext context) async {
     String medicineName = '';
-    TimeOfDay selectedTime = TimeOfDay.now();
+    TimeOfDay? selectedTime = TimeOfDay.now();
     DateTime? selectedDate;
     RepeatType selectedRepeatType = RepeatType.daily;
 
